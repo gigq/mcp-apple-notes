@@ -60,7 +60,7 @@ export class AppleNotesManager {
   }
 
   /**
-   * Searches for notes by title
+   * Searches for notes by content
    * @param query - The search query
    * @returns Array of matching notes
    */
@@ -68,10 +68,19 @@ export class AppleNotesManager {
     const sanitizedQuery = sanitizeForAppleScript(query);
     const sanitizedAccount = sanitizeForAppleScript(this.accountName);
     
+    // Use AppleScript's built-in "whose body contains" for efficient searching
     const script = `
       tell application "Notes"
         tell account "${sanitizedAccount}"
-          get name of notes where name contains "${sanitizedQuery}"
+          set matchingNotes to notes whose body contains "${sanitizedQuery}"
+          set resultList to {}
+          
+          repeat with currentNote in matchingNotes
+            set noteName to name of currentNote
+            set end of resultList to noteName
+          end repeat
+          
+          return resultList
         end tell
       end tell
     `;
@@ -80,6 +89,10 @@ export class AppleNotesManager {
     if (!result.success) {
       // Don't expose internal error details
       throw new Error('Failed to search notes');
+    }
+
+    if (!result.output || result.output.trim() === '') {
+      return [];
     }
 
     return result.output
