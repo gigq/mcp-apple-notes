@@ -4,6 +4,29 @@ import { z } from "zod";
 import { AppleNotesManager } from "@/services/appleNotesManager.js";
 import type { CreateNoteParams, SearchParams, GetNoteParams } from "@/types.js";
 
+// Rate limiting configuration
+const RATE_LIMIT_WINDOW = 60000; // 1 minute
+const MAX_REQUESTS_PER_WINDOW = 30;
+const requestCounts = new Map<string, { count: number; resetTime: number }>();
+
+// Rate limiting middleware
+function checkRateLimit(toolName: string): void {
+  const now = Date.now();
+  const key = toolName;
+  const limit = requestCounts.get(key);
+  
+  if (!limit || now > limit.resetTime) {
+    requestCounts.set(key, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
+    return;
+  }
+  
+  if (limit.count >= MAX_REQUESTS_PER_WINDOW) {
+    throw new Error('Rate limit exceeded. Please try again later.');
+  }
+  
+  limit.count++;
+}
+
 // Initialize the MCP server
 const server = new McpServer({
   name: "apple-notes",
@@ -11,22 +34,44 @@ const server = new McpServer({
   description: "MCP server for interacting with Apple Notes"
 });
 
-// Initialize the notes manager
-const notesManager = new AppleNotesManager();
+// Configuration
+const accountName = process.env.APPLE_NOTES_ACCOUNT || "iCloud";
+const maxTitleLength = 255;
+const maxContentLength = 50000;
+const maxTagLength = 50;
+const maxTags = 20;
 
-// Define tool schemas
+// Initialize the notes manager
+const notesManager = new AppleNotesManager(accountName);
+
+// Define tool schemas with stricter validation
 const createNoteSchema = {
-  title: z.string().min(1, "Title is required"),
-  content: z.string().min(1, "Content is required"),
-  tags: z.array(z.string()).optional()
+  title: z.string()
+    .min(1, "Title is required")
+    .max(maxTitleLength, `Title must be ${maxTitleLength} characters or less`)
+    .regex(/^[^<>:"|?*\x00-\x1F]+$/, "Title contains invalid characters"),
+  content: z.string()
+    .min(1, "Content is required")
+    .max(maxContentLength, `Content must be ${maxContentLength} characters or less`),
+  tags: z.array(
+    z.string()
+      .max(maxTagLength, `Tag must be ${maxTagLength} characters or less`)
+      .regex(/^[\w\s\-]+$/, "Tags can only contain letters, numbers, spaces, and hyphens")
+  ).max(maxTags, `Maximum ${maxTags} tags allowed`).optional()
 };
 
 const searchSchema = {
-  query: z.string().min(1, "Search query is required")
+  query: z.string()
+    .min(1, "Search query is required")
+    .max(100, "Search query must be 100 characters or less")
+    .regex(/^[^<>:"|?*\x00-\x1F]+$/, "Search query contains invalid characters")
 };
 
 const getNoteSchema = {
-  title: z.string().min(1, "Note title is required")
+  title: z.string()
+    .min(1, "Note title is required")
+    .max(maxTitleLength, `Title must be ${maxTitleLength} characters or less`)
+    .regex(/^[^<>:"|?*\x00-\x1F]+$/, "Title contains invalid characters")
 };
 
 // Register tools
@@ -35,12 +80,14 @@ server.tool(
   createNoteSchema,
   async ({ title, content, tags = [] }: CreateNoteParams) => {
     try {
-      const note = notesManager.createNote(title, content, tags);
+      checkRateLimit("create-note");
+      
+      const note = await notesManager.createNote(title, content, tags);
       if (!note) {
         return {
           content: [{
             type: "text",
-            text: "Failed to create note. Please check your Apple Notes configuration."
+            text: "Failed to create note"
           }],
           isError: true
         };
@@ -56,7 +103,9 @@ server.tool(
       return {
         content: [{
           type: "text",
-          text: `Error creating note: ${error instanceof Error ? error.message : 'Unknown error'}`
+          text: error instanceof Error && error.message.includes('Rate limit') 
+            ? error.message 
+            : 'Failed to create note'
         }],
         isError: true
       };
@@ -69,7 +118,9 @@ server.tool(
   searchSchema,
   async ({ query }: SearchParams) => {
     try {
-      const notes = notesManager.searchNotes(query);
+      checkRateLimit("search-notes");
+      
+      const notes = await notesManager.searchNotes(query);
       const message = notes.length
         ? `Found ${notes.length} notes:\n${notes.map(note => `• ${note.title}`).join('\n')}`
         : "No notes found matching your query";
@@ -84,7 +135,9 @@ server.tool(
       return {
         content: [{
           type: "text",
-          text: `Error searching notes: ${error instanceof Error ? error.message : 'Unknown error'}`
+          text: error instanceof Error && error.message.includes('Rate limit') 
+            ? error.message 
+            : 'Failed to search notes'
         }],
         isError: true
       };
@@ -97,7 +150,9 @@ server.tool(
   getNoteSchema,
   async ({ title }: GetNoteParams) => {
     try {
-      const content = notesManager.getNoteContent(title);
+      checkRateLimit("get-note-content");
+      
+      const content = await notesManager.getNoteContent(title);
       return {
         content: [{
           type: "text",
@@ -108,7 +163,9 @@ server.tool(
       return {
         content: [{
           type: "text",
-          text: `Error retrieving note content: ${error instanceof Error ? error.message : 'Unknown error'}`
+          text: error instanceof Error && error.message.includes('Rate limit') 
+            ? error.message 
+            : 'Failed to retrieve note'
         }],
         isError: true
       };

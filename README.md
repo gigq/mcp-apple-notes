@@ -161,6 +161,33 @@ Get the full content of a specific note:
 - Use descriptive titles for better searchability
 - Include relevant tags when creating notes for better organization
 
+## 🔒 Security
+
+### Security Features
+
+- **Command Injection Protection**: All AppleScript commands are executed using safe spawning methods that prevent shell injection attacks
+- **Input Sanitization**: All user inputs are properly escaped before being passed to AppleScript
+- **Input Validation**: Strict validation rules for all parameters:
+  - Title: Max 255 characters, no special characters that could break AppleScript
+  - Content: Max 50,000 characters
+  - Tags: Max 20 tags, 50 characters each, alphanumeric only
+  - Search queries: Max 100 characters, sanitized
+- **Rate Limiting**: Built-in rate limiting (30 requests per minute per tool) to prevent abuse
+- **Secure IDs**: Uses cryptographically secure UUIDs instead of predictable timestamps
+- **Error Handling**: Error messages don't expose internal implementation details
+- **Configurable Account**: Support for custom Apple Notes accounts via `APPLE_NOTES_ACCOUNT` environment variable
+
+### Security Best Practices
+
+1. **Environment Variables**: Set custom account names instead of using the default:
+   ```bash
+   export APPLE_NOTES_ACCOUNT="MyCustomAccount"
+   ```
+
+2. **Access Control**: The MCP server runs with your user privileges. Ensure only trusted applications can connect to it.
+
+3. **Audit Logging**: Monitor the server logs for unusual activity or repeated failures.
+
 ## 🔧 Development
 
 The project uses TypeScript and follows modern ES modules patterns. Key files:

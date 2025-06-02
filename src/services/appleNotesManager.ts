@@ -1,5 +1,6 @@
+import { randomUUID } from 'crypto';
 import type { Note } from '@/types.js';
-import { runAppleScript } from '@/utils/applescript.js';
+import { runAppleScript, sanitizeForAppleScript } from '@/utils/applescript.js';
 
 /**
  * Formats note content for AppleScript compatibility
@@ -9,21 +10,17 @@ import { runAppleScript } from '@/utils/applescript.js';
 const formatContent = (content: string): string => {
   if (!content) return '';
 
-  // Define replacement patterns for text formatting
-  const replacements: [string, RegExp][] = [
-    ['\n', /\n/g],
-    ['\t', /\t/g],
-    ['"', /"/g], // Escape quotes for AppleScript
-  ];
-
-  return replacements.reduce(
-    (text, [char, pattern]) => text.replace(pattern, char === '"' ? '\\"' : '<br>'),
-    content
-  );
+  // Replace newlines with HTML breaks for Apple Notes
+  // The sanitization will handle escaping dangerous characters
+  return content.replace(/\n/g, '<br>');
 };
 
 export class AppleNotesManager {
-  private readonly ICLOUD_ACCOUNT = "iCloud";
+  private readonly accountName: string;
+
+  constructor(accountName: string = "iCloud") {
+    this.accountName = accountName;
+  }
 
   /**
    * Creates a new note in Apple Notes
@@ -32,24 +29,28 @@ export class AppleNotesManager {
    * @param tags - Optional array of tags
    * @returns The created note object or null if creation fails
    */
-  createNote(title: string, content: string, tags: string[] = []): Note | null {
+  async createNote(title: string, content: string, tags: string[] = []): Promise<Note | null> {
+    const sanitizedTitle = sanitizeForAppleScript(title);
     const formattedContent = formatContent(content);
+    const sanitizedContent = sanitizeForAppleScript(formattedContent);
+    const sanitizedAccount = sanitizeForAppleScript(this.accountName);
+    
     const script = `
       tell application "Notes"
-        tell account "${this.ICLOUD_ACCOUNT}"
-          make new note with properties {name:"${title}", body:"${formattedContent}"}
+        tell account "${sanitizedAccount}"
+          make new note with properties {name:"${sanitizedTitle}", body:"${sanitizedContent}"}
         end tell
       end tell
     `;
 
-    const result = runAppleScript(script);
+    const result = await runAppleScript(script);
     if (!result.success) {
-      console.error('Failed to create note:', result.error);
-      return null;
+      // Don't expose internal error details
+      throw new Error('Failed to create note');
     }
 
     return {
-      id: Date.now().toString(),
+      id: randomUUID(),
       title,
       content,
       tags,
@@ -63,27 +64,29 @@ export class AppleNotesManager {
    * @param query - The search query
    * @returns Array of matching notes
    */
-  searchNotes(query: string): Note[] {
-    const sanitizedQuery = query.replace(/"/g, '\\"');
+  async searchNotes(query: string): Promise<Note[]> {
+    const sanitizedQuery = sanitizeForAppleScript(query);
+    const sanitizedAccount = sanitizeForAppleScript(this.accountName);
+    
     const script = `
       tell application "Notes"
-        tell account "${this.ICLOUD_ACCOUNT}"
+        tell account "${sanitizedAccount}"
           get name of notes where name contains "${sanitizedQuery}"
         end tell
       end tell
     `;
 
-    const result = runAppleScript(script);
+    const result = await runAppleScript(script);
     if (!result.success) {
-      console.error('Failed to search notes:', result.error);
-      return [];
+      // Don't expose internal error details
+      throw new Error('Failed to search notes');
     }
 
     return result.output
       .split(',')
       .filter(Boolean)
       .map(title => ({
-        id: Date.now().toString(),
+        id: randomUUID(),
         title: title.trim(),
         content: '',
         tags: [],
@@ -97,20 +100,22 @@ export class AppleNotesManager {
    * @param title - The exact title of the note
    * @returns The note content or empty string if not found
    */
-  getNoteContent(title: string): string {
-    const sanitizedTitle = title.replace(/"/g, '\\"');
+  async getNoteContent(title: string): Promise<string> {
+    const sanitizedTitle = sanitizeForAppleScript(title);
+    const sanitizedAccount = sanitizeForAppleScript(this.accountName);
+    
     const script = `
       tell application "Notes"
-        tell account "${this.ICLOUD_ACCOUNT}"
+        tell account "${sanitizedAccount}"
           get body of note "${sanitizedTitle}"
         end tell
       end tell
     `;
 
-    const result = runAppleScript(script);
+    const result = await runAppleScript(script);
     if (!result.success) {
-      console.error('Failed to get note content:', result.error);
-      return '';
+      // Don't expose internal error details
+      throw new Error('Failed to get note content');
     }
 
     return result.output;
