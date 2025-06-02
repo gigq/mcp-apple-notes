@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { AppleNotesManager } from "@/services/appleNotesManager.js";
-import type { CreateNoteParams, SearchParams, GetNoteParams, EditNoteParams, DeleteNoteParams } from "@/types.js";
+import type { CreateNoteParams, SearchParams, GetNoteParams, EditNoteParams, DeleteNoteParams, MoveNoteParams } from "@/types.js";
 
 // Rate limiting configuration
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
@@ -57,7 +57,10 @@ const createNoteSchema = {
     z.string()
       .max(maxTagLength, `Tag must be ${maxTagLength} characters or less`)
       .regex(/^[\w\s\-]+$/, "Tags can only contain letters, numbers, spaces, and hyphens")
-  ).max(maxTags, `Maximum ${maxTags} tags allowed`).optional()
+  ).max(maxTags, `Maximum ${maxTags} tags allowed`).optional(),
+  folder: z.string()
+    .max(100, "Folder name must be 100 characters or less")
+    .optional()
 };
 
 const searchSchema = {
@@ -91,15 +94,25 @@ const deleteNoteSchema = {
     .regex(/^[^<>:"|?*\x00-\x1F]+$/, "Title contains invalid characters")
 };
 
+const moveNoteSchema = {
+  title: z.string()
+    .min(1, "Note title is required")
+    .max(maxTitleLength, `Title must be ${maxTitleLength} characters or less`)
+    .regex(/^[^<>:"|?*\x00-\x1F]+$/, "Title contains invalid characters"),
+  targetFolder: z.string()
+    .min(1, "Target folder is required")
+    .max(100, "Folder name must be 100 characters or less")
+};
+
 // Register tools
 server.tool(
   "create-note",
   createNoteSchema,
-  async ({ title, content, tags = [] }: CreateNoteParams) => {
+  async ({ title, content, tags = [], folder }: CreateNoteParams) => {
     try {
       checkRateLimit("create-note");
       
-      const note = await notesManager.createNote(title, content, tags);
+      const note = await notesManager.createNote(title, content, tags, folder);
       if (!note) {
         return {
           content: [{
@@ -110,17 +123,21 @@ server.tool(
         };
       }
 
+      const message = folder 
+        ? `✅ Note created successfully in folder "${folder}": "${note.title}"`
+        : `✅ Note created successfully: "${note.title}"`;
+        
       return {
         content: [{
           type: "text",
-          text: `✅ Note created successfully: "${note.title}"`
+          text: message
         }]
       };
     } catch (error) {
       return {
         content: [{
           type: "text",
-          text: error instanceof Error && error.message.includes('Rate limit') 
+          text: error instanceof Error 
             ? error.message 
             : 'Failed to create note'
         }],
@@ -286,6 +303,85 @@ server.tool(
         content: [{
           type: "text",
           text: 'Failed to list accounts'
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+server.tool(
+  "list-folders",
+  {},
+  async () => {
+    try {
+      checkRateLimit("list-folders");
+      
+      const folders = await notesManager.getFolders();
+      
+      if (folders.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: "No folders found in the current account"
+          }]
+        };
+      }
+      
+      const message = `Folders in ${accountName}:\n${folders.map(f => `• ${f.name}`).join('\n')}`;
+      
+      return {
+        content: [{
+          type: "text",
+          text: message
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: error instanceof Error && error.message.includes('Rate limit') 
+            ? error.message 
+            : 'Failed to list folders'
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+server.tool(
+  "move-note",
+  moveNoteSchema,
+  async ({ title, targetFolder }: MoveNoteParams) => {
+    try {
+      checkRateLimit("move-note");
+      
+      const result = await notesManager.moveNote(title, targetFolder);
+      
+      if (!result.success) {
+        return {
+          content: [{
+            type: "text",
+            text: result.error || "Failed to move note"
+          }],
+          isError: true
+        };
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: `✅ Note "${title}" has been moved to folder "${targetFolder}"`
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: error instanceof Error && error.message.includes('Rate limit') 
+            ? error.message 
+            : 'Failed to move note'
         }],
         isError: true
       };

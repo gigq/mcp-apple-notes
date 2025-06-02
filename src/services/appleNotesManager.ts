@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import type { Note } from '@/types.js';
+import type { Note, Folder } from '@/types.js';
 import { runAppleScript, sanitizeForAppleScript } from '@/utils/applescript.js';
 
 /**
@@ -53,24 +53,59 @@ export class AppleNotesManager {
    * @param title - The note title
    * @param content - The note content
    * @param tags - Optional array of tags
+   * @param folder - Optional folder name
    * @returns The created note object or null if creation fails
    */
-  async createNote(title: string, content: string, tags: string[] = []): Promise<Note | null> {
+  async createNote(title: string, content: string, tags: string[] = [], folder?: string): Promise<Note | null> {
     const sanitizedTitle = sanitizeForAppleScript(title);
     const formattedContent = formatContent(content);
     const sanitizedContent = sanitizeForAppleScript(formattedContent);
     const sanitizedAccount = sanitizeForAppleScript(this.accountName);
     
-    // Try a simpler approach first
-    const script = `
-      tell application "Notes"
-        set newNote to make new note with properties {name:"${sanitizedTitle}", body:"${sanitizedContent}"}
-        return "created"
-      end tell
-    `;
+    let script: string;
+    
+    if (folder) {
+      const sanitizedFolder = sanitizeForAppleScript(folder);
+      // Create in specific folder
+      script = `
+        tell application "Notes"
+          tell account "${sanitizedAccount}"
+            set targetFolder to missing value
+            repeat with aFolder in folders
+              if name of aFolder is "${sanitizedFolder}" then
+                set targetFolder to aFolder
+                exit repeat
+              end if
+            end repeat
+            
+            if targetFolder is missing value then
+              return "folder not found"
+            end if
+            
+            tell targetFolder
+              set newNote to make new note with properties {name:"${sanitizedTitle}", body:"${sanitizedContent}"}
+            end tell
+            return "created"
+          end tell
+        end tell
+      `;
+    } else {
+      // Try a simpler approach first
+      script = `
+        tell application "Notes"
+          set newNote to make new note with properties {name:"${sanitizedTitle}", body:"${sanitizedContent}"}
+          return "created"
+        end tell
+      `;
+    }
 
     const result = await runAppleScript(script);
-    if (!result.success) {
+    
+    if (result.output === 'folder not found') {
+      throw new Error('Specified folder not found');
+    }
+    
+    if (!result.success && !folder) {
       // Try with account specification
       const accountScript = `
         tell application "Notes"
@@ -86,6 +121,8 @@ export class AppleNotesManager {
         // Don't expose internal error details
         throw new Error('Failed to create note');
       }
+    } else if (!result.success) {
+      throw new Error('Failed to create note');
     }
 
     return {
@@ -275,6 +312,120 @@ export class AppleNotesManager {
     }
     
     if (deleteResult.output === 'not found') {
+      return {
+        success: false,
+        error: 'Note not found'
+      };
+    }
+
+    return {
+      success: true
+    };
+  }
+
+  /**
+   * Gets list of folders for the current account
+   * @returns Array of folders
+   */
+  async getFolders(): Promise<Folder[]> {
+    const sanitizedAccount = sanitizeForAppleScript(this.accountName);
+    
+    const script = `
+      tell application "Notes"
+        tell account "${sanitizedAccount}"
+          set folderList to {}
+          repeat with aFolder in folders
+            set folderName to name of aFolder
+            set end of folderList to folderName
+          end repeat
+          return folderList
+        end tell
+      end tell
+    `;
+
+    const result = await runAppleScript(script);
+    if (!result.success) {
+      throw new Error('Failed to get folders');
+    }
+
+    if (!result.output || result.output.trim() === '') {
+      return [];
+    }
+
+    return result.output
+      .split(',')
+      .map(name => ({
+        id: randomUUID(),
+        name: name.trim(),
+        account: this.accountName
+      }))
+      .filter(folder => folder.name);
+  }
+
+  /**
+   * Moves a note to a different folder
+   * @param noteTitle - The title of the note to move
+   * @param targetFolderName - The name of the target folder
+   * @returns Success status
+   */
+  async moveNote(noteTitle: string, targetFolderName: string): Promise<{ success: boolean; error?: string }> {
+    const sanitizedTitle = sanitizeForAppleScript(noteTitle);
+    const sanitizedFolder = sanitizeForAppleScript(targetFolderName);
+    const sanitizedAccount = sanitizeForAppleScript(this.accountName);
+    
+    const moveScript = `
+      tell application "Notes"
+        tell account "${sanitizedAccount}"
+          set foundNote to false
+          set targetFolder to missing value
+          
+          -- Find the target folder
+          repeat with aFolder in folders
+            if name of aFolder is "${sanitizedFolder}" then
+              set targetFolder to aFolder
+              exit repeat
+            end if
+          end repeat
+          
+          if targetFolder is missing value then
+            return "folder not found"
+          end if
+          
+          -- Find and move the note
+          set allNotes to every note
+          repeat with aNote in allNotes
+            if name of aNote is "${sanitizedTitle}" then
+              move aNote to targetFolder
+              set foundNote to true
+              exit repeat
+            end if
+          end repeat
+          
+          if foundNote then
+            return "success"
+          else
+            return "note not found"
+          end if
+        end tell
+      end tell
+    `;
+
+    const result = await runAppleScript(moveScript);
+    if (!result.success) {
+      return {
+        success: false,
+        error: 'Failed to move note'
+      };
+    }
+    
+    if (result.output === 'folder not found') {
+      return {
+        success: false,
+        error: 'Target folder not found'
+      };
+    }
+    
+    if (result.output === 'note not found') {
       return {
         success: false,
         error: 'Note not found'

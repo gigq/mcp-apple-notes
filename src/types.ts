@@ -18,6 +18,7 @@ export interface CreateNoteParams {
   title: string;
   content: string;
   tags?: string[];
+  folder?: string;
 }
 
 export interface SearchParams {
@@ -35,4 +36,15 @@ export interface EditNoteParams {
 
 export interface DeleteNoteParams {
   title: string;
+}
+
+export interface MoveNoteParams {
+  title: string;
+  targetFolder: string;
+}
+
+export interface Folder {
+  id: string;
+  name: string;
+  account: string;
 }
