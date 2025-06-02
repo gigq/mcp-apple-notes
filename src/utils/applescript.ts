@@ -11,6 +11,9 @@ export function runAppleScript(script: string): Promise<AppleScriptResult> {
     const chunks: Buffer[] = [];
     const errorChunks: Buffer[] = [];
     
+    // Log the script for debugging (remove in production)
+    console.error('Executing AppleScript:', script);
+    
     // Use spawn to avoid shell injection - script is passed as argument, not interpolated
     const child = spawn('osascript', ['-e', script], {
       timeout: 10000 // 10 second timeout
@@ -25,6 +28,7 @@ export function runAppleScript(script: string): Promise<AppleScriptResult> {
     });
 
     child.on('error', (error) => {
+      console.error('AppleScript execution error:', error);
       resolve({
         success: false,
         output: '',
@@ -37,11 +41,13 @@ export function runAppleScript(script: string): Promise<AppleScriptResult> {
       const errorOutput = Buffer.concat(errorChunks).toString('utf8').trim();
 
       if (code === 0) {
+        console.error('AppleScript success, output:', output);
         resolve({
           success: true,
           output
         });
       } else {
+        console.error('AppleScript failed with code', code, 'error:', errorOutput);
         resolve({
           success: false,
           output: '',
